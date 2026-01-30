@@ -17,16 +17,6 @@ Update your package dependency in `Package.swift`:
 .package(url: "https://github.com/swift-bins/Kingfisher", from: "8.6.2")
 ```
 
-**Note:** You also need to update your target dependency (package name changes):
-
-```swift
-// Before
-.product(name: "Kingfisher", package: "Kingfisher")
-
-// After
-.product(name: "Kingfisher", package: "onevcat_Kingfisher")
-```
-
 ## License
 
 See [LICENSE](LICENSE) - sourced from the original repository.
