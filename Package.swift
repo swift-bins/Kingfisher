@@ -11,8 +11,8 @@ let package = Package(
     targets: [
         .binaryTarget(
             name: "Kingfisher",
-            url: "https://github.com/swift-bins/Kingfisher/releases/download/8.6.2/Kingfisher.xcframework.zip",
-            checksum: "440ed551f9928640f24a59828a8fab19c290c3970d4052e1d45cb86777b6de62"
+            url: "https://github.com/swift-bins/Kingfisher/releases/download/8.7.0/Kingfisher.xcframework.zip",
+            checksum: "d274e74e004d0b4fbd98d968921f87ef1a8fd431a4ac79fc2df556e1f8d87e3d"
         )
     ]
 )

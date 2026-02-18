@@ -2,7 +2,7 @@
 
 Pre-built binary xcframeworks for [Kingfisher](https://github.com/onevcat/Kingfisher).
 
-> ![TIP]
+> [!TIP]
 > swift-bins is currently a proof of concept, but you're welcome to use this prebuilt package. It's easy to get started with and easy to detach from later.
 
 ## Usage
@@ -11,10 +11,10 @@ Update your package dependency in `Package.swift`:
 
 ```swift
 // Before (builds from source)
-.package(url: "https://github.com/onevcat/Kingfisher", from: "8.6.2")
+.package(url: "https://github.com/onevcat/Kingfisher", from: "8.7.0")
 
 // After (uses pre-built binaries)
-.package(url: "https://github.com/swift-bins/Kingfisher", from: "8.6.2")
+.package(url: "https://github.com/swift-bins/Kingfisher", from: "8.7.0")
 ```
 
 ## License
