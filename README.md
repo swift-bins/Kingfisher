@@ -11,10 +11,10 @@ Update your package dependency in `Package.swift`:
 
 ```swift
 // Before (builds from source)
-.package(url: "https://github.com/onevcat/Kingfisher", from: "8.7.0")
+.package(url: "https://github.com/onevcat/Kingfisher", from: "8.8.0")
 
 // After (uses pre-built binaries)
-.package(url: "https://github.com/swift-bins/Kingfisher", from: "8.7.0")
+.package(url: "https://github.com/swift-bins/Kingfisher", from: "8.8.0")
 ```
 
 ## License
