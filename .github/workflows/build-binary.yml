@@ -44,6 +44,10 @@ jobs:
           REQUIRES_OWNER_PREFIX=$(jq -r 'if has("requires_owner_prefix") then .requires_owner_prefix else true end' binify-config.json)
           echo "requires_owner_prefix=$REQUIRES_OWNER_PREFIX" >> $GITHUB_OUTPUT
 
+          # Read no_library_evolution (default to false if not specified)
+          NO_LIBRARY_EVOLUTION=$(jq -r 'if has("no_library_evolution") then .no_library_evolution else false end' binify-config.json)
+          echo "no_library_evolution=$NO_LIBRARY_EVOLUTION" >> $GITHUB_OUTPUT
+
           # Parse owner and name from URL
           # Handles: https://github.com/owner/repo.git or https://github.com/owner/repo
           OWNER=$(echo "$SOURCE_REPO" | sed -E 's#.*github\.com[/:]([^/]+)/.*#\1#')
@@ -54,6 +58,7 @@ jobs:
           echo "Source repo: $SOURCE_REPO"
           echo "Owner: $OWNER, Name: $NAME"
           echo "Requires owner prefix: $REQUIRES_OWNER_PREFIX"
+          echo "No library evolution: $NO_LIBRARY_EVOLUTION"
 
       - name: Determine tag to build
         id: tag
@@ -68,17 +73,20 @@ jobs:
             echo "Using manually specified tag: $TAG"
           else
             # Nightly: get latest semver tag from source repo
-            # Extract owner/repo for API call
-            REPO_PATH=$(echo "$SOURCE_REPO" | sed -E 's#.*github\.com[/:](.+)(\.git)?$#\1#' | sed 's/\.git$//')
-
-            echo "Fetching tags from: $REPO_PATH"
+            echo "Fetching tags from: $SOURCE_REPO"
 
             # Get all tags and find latest stable semver tag (ignore rc, beta, alpha, etc.)
             # Only match tags like: 1.0, 1.0.0, v1.0, v1.0.0
-            TAG=$(gh api "repos/$REPO_PATH/tags" --paginate -q '.[].name' | \
+            # Uses git ls-remote instead of GitHub API to avoid pagination issues with large repos
+            # Uses decorated sort to strip v prefix for comparison while preserving the original tag name
+            TAG=$(git ls-remote --tags "$SOURCE_REPO" | \
+              sed -E 's#.*/tags/##' | \
+              grep -v '\^{}' | \
               grep -E '^v?[0-9]+\.[0-9]+(\.[0-9]+)?$' | \
+              awk '{orig=$0; sub(/^v/,""); print $0, orig}' | \
               sort -V | \
-              tail -1)
+              tail -1 | \
+              awk '{print $2}')
 
             if [ -z "$TAG" ]; then
               echo "No stable semver tags found in source repo (ignoring rc/beta/alpha)"
@@ -154,11 +162,19 @@ jobs:
             xcodebuild -version
           fi
 
-      - name: Setup Swift
+      - name: Install swiftly
         if: steps.check.outputs.skip_build != 'true'
-        uses: swift-actions/setup-swift@v2
-        with:
-          swift-version: "6.2"
+        run: |
+          curl -sLO https://download.swift.org/swiftly/darwin/swiftly.pkg
+          installer -pkg swiftly.pkg -target CurrentUserHomeDirectory
+          ~/.swiftly/bin/swiftly init --quiet-shell-followup --assume-yes
+          echo "$HOME/.swiftly/bin" >> $GITHUB_PATH
+
+      - name: Install Swift 6.2
+        if: steps.check.outputs.skip_build != 'true'
+        run: |
+          swiftly install 6.2 --assume-yes
+          swift --version
 
       - name: Clone source repo at tag
         if: steps.check.outputs.skip_build != 'true'
@@ -176,8 +192,8 @@ jobs:
           swift build -c release
           echo "swift-binify built successfully"
 
-      - name: Run swift-binify
-        if: steps.check.outputs.skip_build != 'true'
+      - name: Run swift-binify (with library evolution)
+        if: steps.check.outputs.skip_build != 'true' && steps.config.outputs.no_library_evolution != 'true'
         env:
           TAG: ${{ steps.tag.outputs.tag }}
           SOURCE_REPO: ${{ steps.config.outputs.source_repo }}
@@ -186,7 +202,6 @@ jobs:
           RELEASE_URL_BASE="https://github.com/${{ github.repository }}/releases/download"
           BINARY_REPO_URL="https://github.com/${{ github.repository }}"
 
-          # Build owner prefix flag
           OWNER_PREFIX_FLAG=""
           if [ "$REQUIRES_OWNER_PREFIX" = "true" ]; then
             OWNER_PREFIX_FLAG="--requires-owner-prefix"
@@ -200,7 +215,56 @@ jobs:
             --binary-repo "$BINARY_REPO_URL" \
             $OWNER_PREFIX_FLAG
 
-          # Get the package identity (package name from source directory)
+          PACKAGE_NAME=$(basename /tmp/source)
+          OUTPUT_DIR="/tmp/swift-binify-dylibs/$PACKAGE_NAME"
+
+          echo "output_dir=$OUTPUT_DIR" >> $GITHUB_ENV
+          echo "Build output: $OUTPUT_DIR"
+
+      - name: Run swift-binify (no library evolution, per Swift version)
+        if: steps.check.outputs.skip_build != 'true' && steps.config.outputs.no_library_evolution == 'true'
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+          SOURCE_REPO: ${{ steps.config.outputs.source_repo }}
+          REQUIRES_OWNER_PREFIX: ${{ steps.config.outputs.requires_owner_prefix }}
+        run: |
+          RELEASE_URL_BASE="https://github.com/${{ github.repository }}/releases/download"
+          BINARY_REPO_URL="https://github.com/${{ github.repository }}"
+
+          OWNER_PREFIX_FLAG=""
+          if [ "$REQUIRES_OWNER_PREFIX" = "true" ]; then
+            OWNER_PREFIX_FLAG="--requires-owner-prefix"
+          fi
+
+          # Swift versions to build for (must match Constants.supportedSwiftVersions)
+          SWIFT_VERSIONS="5.8 5.9 5.9.2 5.10 6.0 6.1 6.2 6.2.1 6.2.3"
+
+          for SWIFT_VER in $SWIFT_VERSIONS; do
+            echo "::group::Building for Swift $SWIFT_VER"
+
+            swiftly install "$SWIFT_VER" --assume-yes || { echo "::error::Failed to install Swift $SWIFT_VER"; exit 1; }
+            swiftly use "$SWIFT_VER" --assume-yes
+            echo "Active Swift version:"
+            which swift
+            swift --version
+
+            # Re-clone source to get a clean Package.swift (swift-binify modifies it during build)
+            rm -rf /tmp/source
+            git clone --depth 1 --branch "$TAG" "$SOURCE_REPO" /tmp/source
+
+            /tmp/swift-binify/.build/release/swift-binify /tmp/source \
+              --output-mode release \
+              --release-url-base "$RELEASE_URL_BASE" \
+              --tag "$TAG" \
+              --source-repo "$SOURCE_REPO" \
+              --binary-repo "$BINARY_REPO_URL" \
+              --no-library-evolution \
+              --swift-version-tag "$SWIFT_VER" \
+              $OWNER_PREFIX_FLAG
+
+            echo "::endgroup::"
+          done
+
           PACKAGE_NAME=$(basename /tmp/source)
           OUTPUT_DIR="/tmp/swift-binify-dylibs/$PACKAGE_NAME"
 
@@ -210,14 +274,16 @@ jobs:
       - name: Copy build artifacts
         if: steps.check.outputs.skip_build != 'true'
         run: |
-          # Copy Package.swift and README.md
-          cp "$output_dir/Package.swift" ./Package.swift
+          # Copy Package.swift and any versioned Package@swift-*.swift manifests
+          cp "$output_dir"/Package.swift ./Package.swift
+          cp "$output_dir"/Package@swift-*.swift . 2>/dev/null || true
           cp "$output_dir/README.md" ./README.md
 
-          # Copy zipped xcframeworks
+          # Copy zipped xcframeworks (includes versioned zips like Target-swift-6.2.xcframework.zip)
           cp "$output_dir"/*.xcframework.zip . 2>/dev/null || true
 
           echo "Copied build artifacts"
+          ls -la Package*.swift 2>/dev/null
           ls -la *.xcframework.zip 2>/dev/null || echo "No zip files found"
 
       - name: Copy LICENSE from source
@@ -237,6 +303,7 @@ jobs:
 
           # Add specific files (NOT the zip files - those go to releases only)
           git add Package.swift README.md .github/workflows/build-binary.yml
+          git add Package@swift-*.swift 2>/dev/null || true
           git add LICENSE* 2>/dev/null || true
 
           # Check if there are changes to commit
